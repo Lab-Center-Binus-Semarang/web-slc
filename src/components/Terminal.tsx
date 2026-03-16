@@ -124,8 +124,12 @@ export function TerminalOverlay({ isOpen, onClose }: { isOpen: boolean; onClose:
         setMode('riddle');
         break;
       case 'whoami':
-        const { data: { user } } = await supabase.auth.getUser();
-        output = user ? `Logged in as: ${user.email}` : 'Not logged in. Guest access.';
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          output = user ? `Logged in as: ${user.email}` : 'Not logged in. Guest access.';
+        } catch (err) {
+          output = 'Error fetching user info. Connection failed.';
+        }
         break;
       default:
         output = `Command not found: ${mainCmd}. Type "help" for available commands.`;

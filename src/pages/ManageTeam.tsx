@@ -11,43 +11,69 @@ export function ManageTeam() {
   const [team, setTeam] = useState<any[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingMember, setEditingMember] = useState<any>(null);
+  const [uploading, setUploading] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
     const init = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        navigate('/');
-        return;
-      }
-      
-      setUser(user);
-      
-      // Fetch role
-      const { data: roleData } = await supabase
-        .from('user_roles')
-        .select('role_id')
-        .eq('user_id', user.id)
-        .maybeSingle();
+      try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
         
-      const role = roleData ? (roleData.role_id === 1 ? 'admin' : 'assistant') : 'user';
-      setUserRole(role);
+        if (authError) {
+          console.error("Auth error:", authError);
+        }
 
-      if (role !== 'admin' && role !== 'assistant') {
-        navigate('/admin');
-        return;
-      }
-
-      // Fetch team profiles
-      const { data: profiles } = await supabase
-        .from('profiles')
-        .select('*');
+        if (!user) {
+          navigate('/');
+          return;
+        }
         
-      if (profiles) {
-        setTeam(profiles);
+        setUser(user);
+        
+        // Fetch role
+        const { data: roleData, error: roleError } = await supabase
+          .from('user_roles')
+          .select('role_id')
+          .eq('user_id', user.id);
+          
+        if (roleError) {
+          console.error("Error fetching roles:", roleError);
+        }
+
+        let role = 'user';
+        if (roleData && roleData.length > 0) {
+          const roleIds = roleData.map(r => r.role_id);
+          if (roleIds.includes(1)) {
+            role = 'admin';
+          } else if (roleIds.includes(2)) {
+            role = 'assistant';
+          }
+        }
+        
+        setUserRole(role);
+
+        if (role !== 'admin' && role !== 'assistant') {
+          navigate('/admin');
+          return;
+        }
+
+        // Fetch team profiles
+        const { data: profiles, error: profilesError } = await supabase
+          .from('profiles')
+          .select('*');
+          
+        if (profilesError) {
+          console.error("Error fetching profiles:", profilesError);
+        }
+
+        if (profiles) {
+          setTeam(profiles);
+        }
+      } catch (err) {
+        console.error("Unexpected error during init:", err);
+      } finally {
+        setLoading(false);
       }
-      
-      setLoading(false);
     };
     init();
   }, [navigate]);
@@ -62,26 +88,72 @@ export function ManageTeam() {
 
   const handleSave = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    setUploading(true);
     const formData = new FormData(e.currentTarget);
-    const updates = {
-      full_name: formData.get('full_name') as string,
-      role_title: formData.get('role_title') as string,
-      specialty: formData.get('specialty') as string,
-      bio: formData.get('bio') as string,
-      image_url: formData.get('image_url') as string || `https://picsum.photos/seed/${formData.get('full_name')}/400/400`,
-    };
+    
+    let image_url = editingMember?.image_url;
+    const imageFile = formData.get('profile_image') as File;
 
-    if (editingMember) {
-      const { error } = await supabase.from('profiles').update(updates).eq('id', editingMember.id);
-      if (!error) {
-        setTeam(team.map(m => m.id === editingMember.id ? { ...m, ...updates } : m));
-      } else {
-        console.error("Failed to update profile", error);
-        alert("Failed to update profile. Check console for details.");
+    try {
+      if (imageFile && imageFile.size > 0) {
+        const fileExt = imageFile.name.split('.').pop();
+        const fileName = `${editingMember.id}.${fileExt}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('profiles')
+          .upload(fileName, imageFile, { upsert: true });
+
+        if (uploadError) {
+          console.error('Error uploading image:', uploadError);
+          alert(`Failed to upload image: ${uploadError.message}. Please ensure the "profiles" storage bucket exists.`);
+        } else {
+          const { data: publicUrlData } = supabase.storage
+            .from('profiles')
+            .getPublicUrl(fileName);
+          image_url = publicUrlData.publicUrl;
+        }
       }
+
+      const updates = {
+        full_name: formData.get('full_name') as string,
+        initials: formData.get('initials') as string,
+        is_active: formData.get('is_active') === 'true',
+        bio: formData.get('bio') as string,
+        github_url: formData.get('github_url') as string,
+        ig_url: formData.get('ig_url') as string,
+        linkedin_url: formData.get('linkedin_url') as string,
+        image_url: image_url || `https://picsum.photos/seed/${formData.get('full_name')}/400/400`,
+      };
+
+      console.log("Attempting to save updates:", updates);
+
+      if (editingMember) {
+        // Use .select() to ensure the row was actually updated (catches RLS silent failures)
+        const { data: updatedData, error } = await supabase
+          .from('profiles')
+          .update(updates)
+          .eq('id', editingMember.id)
+          .select();
+          
+        if (error) {
+          console.error("Failed to update profile", error);
+          alert(`Failed to update profile: ${error.message}. Did you run the SQL to add the new columns?`);
+        } else if (!updatedData || updatedData.length === 0) {
+          console.error("Update blocked by RLS or row not found.");
+          alert("Update failed. You might not have permission to edit this profile, or the database policy blocked it.");
+        } else {
+          console.log("Successfully updated profile:", updatedData[0]);
+          setTeam(team.map(m => m.id === editingMember.id ? { ...m, ...updatedData[0] } : m));
+          setIsModalOpen(false);
+          setEditingMember(null);
+        }
+      }
+    } catch (err: any) {
+      console.error("Unexpected error during save:", err);
+      alert(`An unexpected error occurred: ${err.message || 'Failed to fetch'}. Please check your connection or database schema.`);
+    } finally {
+      setUploading(false);
     }
-    setIsModalOpen(false);
-    setEditingMember(null);
   };
 
   const openEditModal = (member: any) => {
@@ -107,37 +179,49 @@ export function ManageTeam() {
         </div>
       </div>
 
-      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-8">
         {displayedTeam.map((member, i) => (
           <motion.div
             key={member.id}
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.1 }}
-            className="bg-white rounded-2xl border border-zinc-200 shadow-sm overflow-hidden flex flex-col"
+            className="group bg-white rounded-3xl p-8 border border-zinc-200 shadow-sm hover:shadow-xl transition-all duration-300 relative overflow-hidden flex flex-col"
           >
-            <div className="aspect-video w-full bg-zinc-100 relative">
-              <img 
-                src={member.image_url || `https://picsum.photos/seed/${member.full_name}/400/400`} 
-                alt={member.full_name} 
-                className="w-full h-full object-cover"
-                referrerPolicy="no-referrer"
-              />
-              <div className="absolute top-2 right-2 flex gap-2">
-                <button 
-                  onClick={() => openEditModal(member)}
-                  className="p-2 bg-white/90 backdrop-blur text-zinc-700 hover:text-indigo-600 rounded-lg shadow-sm transition-colors"
-                  title="Edit Profile"
-                >
-                  <Edit2 size={16} />
-                </button>
+            <div className="absolute top-0 left-0 w-full h-32 bg-indigo-50/50 group-hover:bg-indigo-100/50 transition-colors" />
+            
+            <div className="absolute top-4 right-4 z-20 flex gap-2">
+              <button 
+                onClick={() => openEditModal(member)}
+                className="p-2 bg-white/80 backdrop-blur-sm text-zinc-600 hover:text-indigo-600 hover:bg-white rounded-full shadow-sm transition-all"
+                title="Edit Profile"
+              >
+                <Edit2 size={16} />
+              </button>
+            </div>
+
+            <div className="relative z-10 flex flex-col items-center">
+              <div className="w-32 h-32 rounded-full overflow-hidden border-4 border-white shadow-lg mb-6 bg-zinc-100">
+                <img 
+                  src={member.image_url ? `${member.image_url}?t=${Date.now()}` : `https://picsum.photos/seed/${member.full_name}/400/400`} 
+                  alt={member.full_name} 
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
               </div>
             </div>
-            <div className="p-5 flex-1 flex flex-col">
-              <h3 className="text-lg font-semibold text-zinc-900">{member.full_name}</h3>
-              <p className="text-sm font-medium text-indigo-600 mb-1">{member.role_title || 'Lab Assistant'}</p>
-              <p className="text-xs text-zinc-500 mb-3">{member.specialty || 'No specialty set'}</p>
-              <p className="text-sm text-zinc-600 line-clamp-3">{member.bio || 'No bio provided.'}</p>
+            <div className="text-center flex-1 flex flex-col">
+              <h3 className="text-xl font-semibold text-zinc-900 mb-0">
+                {member.full_name}
+              </h3>
+              {member.initials && (
+                <p className="text-sm font-medium text-zinc-500 mb-2">
+                  {member.is_active === false ? `ex. ${member.initials}` : member.initials}
+                </p>
+              )}
+              <p className="text-sm font-medium text-indigo-600 mb-4">{member.role_title || 'Lab Assistant'}</p>
+              
+              <p className="text-sm text-zinc-600 leading-relaxed line-clamp-3">{member.bio || 'No bio provided.'}</p>
             </div>
           </motion.div>
         ))}
@@ -176,50 +260,51 @@ export function ManageTeam() {
                 </button>
               </div>
               
-              <form onSubmit={handleSave} className="p-6 space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-zinc-700 mb-1">Full Name</label>
-                  <input 
-                    name="full_name"
-                    type="text" 
-                    defaultValue={editingMember?.full_name}
-                    required
-                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-zinc-700 mb-1">Role Title</label>
+              <form onSubmit={handleSave} className="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="col-span-2">
+                    <label className="block text-sm font-medium text-zinc-700 mb-1">Full Name</label>
                     <input 
-                      name="role_title"
+                      name="full_name"
                       type="text" 
-                      defaultValue={editingMember?.role_title}
-                      placeholder="e.g. Lead Lab Assistant"
+                      defaultValue={editingMember?.full_name}
+                      required
                       className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-zinc-700 mb-1">Specialty</label>
+                    <label className="block text-sm font-medium text-zinc-700 mb-1">Initials</label>
                     <input 
-                      name="specialty"
+                      name="initials"
                       type="text" 
-                      defaultValue={editingMember?.specialty}
-                      placeholder="e.g. Web Dev"
-                      className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                      defaultValue={editingMember?.initials}
+                      placeholder="e.g. BS"
+                      className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 uppercase"
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-zinc-700 mb-1">Image URL</label>
-                  <input 
-                    name="image_url"
-                    type="url" 
-                    defaultValue={editingMember?.image_url}
-                    placeholder="Leave empty for random avatar"
+                  <label className="block text-sm font-medium text-zinc-700 mb-1">Status</label>
+                  <select 
+                    name="is_active"
+                    defaultValue={editingMember?.is_active === false ? 'false' : 'true'}
                     className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                  >
+                    <option value="true">Active</option>
+                    <option value="false">Ex (Alumni)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-zinc-700 mb-1">Profile Image</label>
+                  <input 
+                    name="profile_image"
+                    type="file" 
+                    accept="image/*"
+                    className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 file:mr-4 file:py-1 file:px-3 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
                   />
+                  <p className="text-xs text-zinc-500 mt-1">Leave empty to keep current image.</p>
                 </div>
 
                 <div>
@@ -232,20 +317,63 @@ export function ManageTeam() {
                   ></textarea>
                 </div>
 
+                <div className="space-y-3 pt-2 border-t border-zinc-100">
+                  <h3 className="text-sm font-semibold text-zinc-900">Social Links</h3>
+                  
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 mb-1">GitHub URL</label>
+                    <input 
+                      name="github_url"
+                      type="url" 
+                      defaultValue={editingMember?.github_url}
+                      placeholder="https://github.com/username"
+                      className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 mb-1">Instagram URL</label>
+                    <input 
+                      name="ig_url"
+                      type="url" 
+                      defaultValue={editingMember?.ig_url}
+                      placeholder="https://instagram.com/username"
+                      className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-medium text-zinc-700 mb-1">LinkedIn URL</label>
+                    <input 
+                      name="linkedin_url"
+                      type="url" 
+                      defaultValue={editingMember?.linkedin_url}
+                      placeholder="https://linkedin.com/in/username"
+                      className="w-full px-3 py-2 border border-zinc-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+
                 <div className="pt-4 flex justify-end gap-3">
                   <button 
                     type="button"
                     onClick={() => setIsModalOpen(false)}
-                    className="px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors"
+                    disabled={uploading}
+                    className="px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100 rounded-lg transition-colors disabled:opacity-50"
                   >
                     Cancel
                   </button>
                   <button 
                     type="submit"
-                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm"
+                    disabled={uploading}
+                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition-colors shadow-sm disabled:opacity-50"
                   >
-                    <Save size={16} />
-                    Save Changes
+                    {uploading ? (
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <Save size={16} />
+                    )}
+                    {uploading ? 'Saving...' : 'Save Changes'}
                   </button>
                 </div>
               </form>

@@ -12,29 +12,56 @@ export function Admin() {
 
   useEffect(() => {
     const initAuth = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        navigate('/');
-        return;
-      }
-      
-      setUser(user);
+      try {
+        const { data: { user }, error: authError } = await supabase.auth.getUser();
+        
+        if (authError) {
+          console.error("Auth error:", authError);
+        }
 
-      // Fetch role from the user_roles table
-      // role_id 1 = Admin, role_id 2 = Aslab (Assistant)
-      const { data: roleData } = await supabase
-        .from('user_roles')
-        .select('role_id')
-        .eq('user_id', user.id)
-        .maybeSingle();
+        if (!user) {
+          navigate('/');
+          return;
+        }
+        
+        setUser(user);
 
-      if (roleData) {
-        setUserRole(roleData.role_id === 1 ? 'admin' : 'assistant');
-      } else {
-        setUserRole('user');
+        // Ambil semua role yang dimiliki user ini (bisa lebih dari satu)
+        const { data: roleData, error: roleError } = await supabase
+          .from('user_roles')
+          .select('role_id')
+          .eq('user_id', user.id);
+
+        // Tampilkan error di console browser jika ada masalah koneksi/keamanan
+        if (roleError) {
+          console.error("Gagal mengambil data role:", roleError.message);
+        }
+
+        console.log(roleData);
+
+        // Cek apakah data role ditemukan dan tidak kosong
+        if (roleData && roleData.length > 0) {
+          // Ubah format [{role_id: 1}, {role_id: 2}] menjadi array angka sederhana [1, 2]
+          const roleIds = roleData.map(r => r.role_id);
+
+          // Prioritaskan pengecekan Admin terlebih dahulu
+          if (roleIds.includes(1)) {
+            setUserRole('admin');
+          } else if (roleIds.includes(2)) {
+            setUserRole('assistant');
+          } else {
+            setUserRole('user');
+          }
+        } else {
+          // Jika tidak ada data di user_roles, jadikan user biasa
+          console.log("GAADA" + user.id);
+          setUserRole('user');
+        }
+      } catch (err) {
+        console.error("Unexpected error during initAuth:", err);
+      } finally {
+        setLoading(false);
       }
-      
-      setLoading(false);
     };
 
     initAuth();
