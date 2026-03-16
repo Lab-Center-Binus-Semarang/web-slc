@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Github, Linkedin, Mail } from 'lucide-react';
+import { Github, Linkedin, Mail, Instagram } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 
 export function Team() {
@@ -9,18 +9,27 @@ export function Team() {
 
   useEffect(() => {
     const fetchTeam = async () => {
-      // Fetch users who have a role assigned in user_roles
-      const { data, error } = await supabase
-        .from('profiles')
-        .select(`
-          *,
-          user_roles!inner(role_id)
-        `);
-      
-      if (data) {
-        setTeam(data);
+      try {
+        // Fetch users who have a role assigned in user_roles
+        const { data, error } = await supabase
+          .from('profiles')
+          .select(`
+            *,
+            user_roles!inner(role_id)
+          `);
+        
+        if (error) {
+          console.error("Error fetching team:", error);
+        }
+        
+        if (data) {
+          setTeam(data);
+        }
+      } catch (err) {
+        console.error("Unexpected error fetching team:", err);
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     };
 
     fetchTeam();
@@ -60,21 +69,45 @@ export function Team() {
             >
               <div className="relative mb-6 overflow-hidden rounded-2xl aspect-square bg-zinc-100">
                 <img 
-                  src={member.image_url || `https://picsum.photos/seed/${member.full_name}/400/400`} 
+                  src={member.image_url ? `${member.image_url}?t=${Date.now()}` : `https://picsum.photos/seed/${member.full_name}/400/400`} 
                   alt={member.full_name} 
                   className="object-cover w-full h-full group-hover:scale-105 transition-transform duration-500"
                   referrerPolicy="no-referrer"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-end justify-center pb-4 gap-4">
-                  <a href="#" className="text-white hover:text-indigo-300 transition-colors"><Github size={20} /></a>
-                  <a href="#" className="text-white hover:text-indigo-300 transition-colors"><Linkedin size={20} /></a>
-                  <a href="#" className="text-white hover:text-indigo-300 transition-colors"><Mail size={20} /></a>
+                  {member.github_url && (
+                    <a href={member.github_url} target="_blank" rel="noopener noreferrer" className="text-white hover:text-indigo-300 transition-colors">
+                      <Github size={20} />
+                    </a>
+                  )}
+                  {member.linkedin_url && (
+                    <a href={member.linkedin_url} target="_blank" rel="noopener noreferrer" className="text-white hover:text-indigo-300 transition-colors">
+                      <Linkedin size={20} />
+                    </a>
+                  )}
+                  {member.ig_url && (
+                    <a href={member.ig_url} target="_blank" rel="noopener noreferrer" className="text-white hover:text-indigo-300 transition-colors">
+                      <Instagram size={20} />
+                    </a>
+                  )}
+                  {member.email && (
+                    <a href={`mailto:${member.email}`} className="text-white hover:text-indigo-300 transition-colors">
+                      <Mail size={20} />
+                    </a>
+                  )}
                 </div>
               </div>
               <div className="text-center">
-                <h3 className="text-xl font-semibold text-zinc-900 mb-1">{member.full_name}</h3>
-                <p className="text-sm font-medium text-indigo-600 mb-3">{member.role_title || 'Lab Assistant'}</p>
-                <p className="text-xs text-zinc-500 mb-4">{member.specialty || 'No specialty set'}</p>
+                <h3 className="text-xl font-semibold text-zinc-900 mb-0">
+                  {member.full_name}
+                </h3>
+                {member.initials && (
+                  <p className="text-sm font-medium text-zinc-500 mb-2">
+                    {member.is_active === false ? `ex. ${member.initials}` : member.initials}
+                  </p>
+                )}
+                <p className="text-sm font-medium text-indigo-600 mb-4">{member.role_title || 'Lab Assistant'}</p>
+                
                 <p className="text-sm text-zinc-600 leading-relaxed">{member.bio || 'No bio provided.'}</p>
               </div>
             </motion.div>

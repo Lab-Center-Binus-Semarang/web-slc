@@ -12,6 +12,8 @@ export function Layout() {
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       setUser(user);
+    }).catch(err => {
+      console.error("Error fetching user in layout:", err);
     });
 
     const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
@@ -69,12 +71,42 @@ export function Layout() {
             
             {user && (
               <div className="flex items-center gap-4 ml-4 pl-4 border-l border-zinc-200">
-                <Link to="/admin" className="text-zinc-600 hover:text-indigo-600 transition-colors">
-                  Dashboard
-                </Link>
+                <div className="relative group py-2">
+                  <Link 
+                    to="/admin" 
+                    className={`flex items-center gap-1 transition-colors hover:text-indigo-600 ${location.pathname.startsWith('/admin') ? 'text-indigo-600' : 'text-zinc-600'}`}
+                  >
+                    Dashboard
+                  </Link>
+                  
+                  {/* Dropdown Menu */}
+                  <div className="absolute top-full right-0 mt-0 w-48 bg-white border border-zinc-200 rounded-xl shadow-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 transform origin-top z-50 overflow-hidden">
+                    <div className="py-2">
+                      <Link 
+                        to="/admin/team" 
+                        className="block px-4 py-2 text-sm text-zinc-700 hover:bg-indigo-50 hover:text-indigo-600 transition-colors"
+                      >
+                        Manage Team
+                      </Link>
+                      <Link 
+                        to="/admin" 
+                        className="block px-4 py-2 text-sm text-zinc-700 hover:bg-indigo-50 hover:text-indigo-600 transition-colors"
+                      >
+                        Manage Content
+                      </Link>
+                      <Link 
+                        to="/admin" 
+                        className="block px-4 py-2 text-sm text-zinc-700 hover:bg-indigo-50 hover:text-indigo-600 transition-colors"
+                      >
+                        System Settings
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+                
                 <button 
                   onClick={handleLogout}
-                  className="flex items-center gap-2 text-red-600 hover:text-red-700 transition-colors"
+                  className="flex items-center gap-2 text-red-600 hover:text-red-700 transition-colors ml-2"
                 >
                   <LogOut size={16} />
                   Logout
